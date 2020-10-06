@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -105,8 +106,7 @@ func (client *HTTPClient) do(method, path string, body interface{}, headers map[
 }
 
 func (client *HTTPClient) doWithRetry(req *http.Request, body interface{}) (*http.Response, error) {
-	attempt := 0
-	for {
+	for attempt := 0; attempt <= client.maxRetry; {
 		// reset the body when non-nil for every request (rewind)
 		if body != nil {
 			data, err := json.Marshal(body)
@@ -129,38 +129,46 @@ func (client *HTTPClient) doWithRetry(req *http.Request, body interface{}) (*htt
 		} else if strings.Contains(err.Error(), "no such host") {
 			return nil, errConnectionIssue
 		}
-
 		attempt++
-		if attempt > client.maxRetry {
-			return resp, fmt.Errorf("request failed after %v retries with err: %v", client.maxRetry, err)
-		}
 		time.Sleep(time.Duration(attempt) * time.Second)
 	}
+	return nil, fmt.Errorf("request failed after %v retries", client.maxRetry)
 }
 
 func generateHTTPAdapter(timeout time.Duration, proxyURL string) (*http.Client, error) {
-	adapter := &http.Client{Timeout: timeout}
-	if transport, err := generateClientTransport(proxyURL); err != nil {
+	transport, err := generateClientTransport(proxyURL)
+	if err != nil {
 		return nil, err
-	} else if transport != nil {
-		adapter.Transport = transport
 	}
-	return adapter, nil
+	return &http.Client{
+		Transport: transport,
+		Timeout:   timeout,
+	}, nil
 }
 
 func generateClientTransport(proxyURL string) (*http.Transport, error) {
-	if proxyURL == "" {
-		return nil, nil
+	var proxy func(*http.Request) (*url.URL, error)
+	if proxyURL != "" {
+		parsedURL, err := url.ParseRequestURI(proxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid proxy URI")
+		}
+		proxy = http.ProxyURL(parsedURL)
 	}
 
-	parsedURL, err := url.ParseRequestURI(proxyURL)
-	if err != nil {
-		return nil, fmt.Errorf("invalid proxy URI")
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
 	}
 
 	return &http.Transport{
-		Proxy:           http.ProxyURL(parsedURL),
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		Proxy:                 proxy,
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
+		IdleConnTimeout:       10 * time.Second,
+		TLSHandshakeTimeout:   time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		MaxIdleConnsPerHost:   100,
+		DialContext:           dialer.DialContext,
 	}, nil
 }
 

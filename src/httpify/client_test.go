@@ -139,7 +139,7 @@ func TestClient_do(t *testing.T) {
 	assert.Nil(t, err)
 
 	_, err = client.do("POST", "/assets.json", body, nil)
-	assert.Contains(t, err.Error(), "request failed after 1 retries with err: ", server.URL)
+	assert.Contains(t, err.Error(), "request failed after 1 retries", server.URL)
 	server.Close()
 }
 
@@ -158,18 +158,25 @@ func TestGenerateHTTPAdapter(t *testing.T) {
 func TestGenerateClientTransport(t *testing.T) {
 	testcases := []struct {
 		proxyURL, err string
-		expectNil     bool
 	}{
-		{proxyURL: "", expectNil: true},
-		{proxyURL: "http//localhost:3000", expectNil: true, err: "invalid proxy URI"},
-		{proxyURL: "http://127.0.0.1:8080", expectNil: false},
+		{proxyURL: ""},
+		{proxyURL: "http//localhost:3000", err: "invalid proxy URI"},
+		{proxyURL: "http://127.0.0.1:8080"},
 	}
 
 	for _, testcase := range testcases {
 		transport, err := generateClientTransport(testcase.proxyURL)
-		assert.Equal(t, transport == nil, testcase.expectNil)
-		if testcase.err == "" {
-			assert.Nil(t, err)
+		if testcase.err == "" && assert.Nil(t, err) {
+			if testcase.proxyURL == "" {
+				assert.Nil(t, transport.Proxy)
+			} else {
+				assert.NotNil(t, transport.Proxy)
+			}
+			assert.True(t, transport.TLSClientConfig.InsecureSkipVerify)
+			assert.Equal(t, 10*time.Second, transport.IdleConnTimeout)
+			assert.Equal(t, time.Second, transport.TLSHandshakeTimeout)
+			assert.Equal(t, time.Second, transport.ExpectContinueTimeout)
+			assert.Equal(t, 100, transport.MaxIdleConnsPerHost)
 		} else if assert.NotNil(t, err) {
 			assert.Contains(t, err.Error(), testcase.err)
 		}
