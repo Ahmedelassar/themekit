@@ -2,6 +2,7 @@ package httpify
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -156,20 +157,38 @@ func generateClientTransport(proxyURL string) (*http.Transport, error) {
 		proxy = http.ProxyURL(parsedURL)
 	}
 
-	dialer := &net.Dialer{
-		Timeout:   30 * time.Second,
-		KeepAlive: 30 * time.Second,
-	}
-
 	return &http.Transport{
 		Proxy:                 proxy,
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
-		IdleConnTimeout:       10 * time.Second,
+		IdleConnTimeout:       time.Second,
 		TLSHandshakeTimeout:   time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		MaxIdleConnsPerHost:   100,
-		DialContext:           dialer.DialContext,
+		ExpectContinueTimeout: time.Second,
+		ResponseHeaderTimeout: time.Second,
+		MaxIdleConnsPerHost:   10,
+		DialContext:           newDialContextDialer(),
 	}, nil
+}
+
+type contextDialer func(ctx context.Context, network, address string) (net.Conn, error)
+
+func newDialContextDialer() contextDialer {
+	dialer := &net.Dialer{
+		Timeout:   3 * time.Second,
+		KeepAlive: 1 * time.Second,
+	}
+	return func(ctx context.Context, network, address string) (conn net.Conn, err error) {
+		if conn, err = dialer.DialContext(ctx, network, address); err != nil {
+			return nil, err
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		if err := conn.SetDeadline(deadline); err != nil {
+			return nil, err
+		}
+		if err := conn.SetReadDeadline(deadline); err != nil {
+			return nil, err
+		}
+		return conn, nil
+	}
 }
 
 func parseBaseURL(domain string) (*url.URL, error) {

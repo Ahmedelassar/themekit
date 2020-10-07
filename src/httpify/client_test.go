@@ -173,10 +173,10 @@ func TestGenerateClientTransport(t *testing.T) {
 				assert.NotNil(t, transport.Proxy)
 			}
 			assert.True(t, transport.TLSClientConfig.InsecureSkipVerify)
-			assert.Equal(t, 10*time.Second, transport.IdleConnTimeout)
+			assert.Equal(t, time.Second, transport.IdleConnTimeout)
 			assert.Equal(t, time.Second, transport.TLSHandshakeTimeout)
 			assert.Equal(t, time.Second, transport.ExpectContinueTimeout)
-			assert.Equal(t, 100, transport.MaxIdleConnsPerHost)
+			assert.Equal(t, 10, transport.MaxIdleConnsPerHost)
 		} else if assert.NotNil(t, err) {
 			assert.Contains(t, err.Error(), testcase.err)
 		}
