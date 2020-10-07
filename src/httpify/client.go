@@ -21,8 +21,38 @@ import (
 )
 
 var (
-	errConnectionIssue = errors.New("DNS problem while connecting to Shopify, this indicates a problem with your internet connection")
+	// ErrConnectionIssue is an error that is thrown when a very specific error is
+	// returned from our http request that usually implies bad connections.
+	ErrConnectionIssue = errors.New("DNS problem while connecting to Shopify, this indicates a problem with your internet connection")
+	// ErrInvalidProxyURL is returned if a proxy url has been passed but is improperly formatted
+	ErrInvalidProxyURL = errors.New("invalid proxy URI")
+	netDialer          = &net.Dialer{
+		Timeout:   3 * time.Second,
+		KeepAlive: 1 * time.Second,
+	}
+	httpTransport = &http.Transport{
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
+		IdleConnTimeout:       time.Second,
+		TLSHandshakeTimeout:   time.Second,
+		ExpectContinueTimeout: time.Second,
+		ResponseHeaderTimeout: time.Second,
+		MaxIdleConnsPerHost:   10,
+		DialContext: func(ctx context.Context, network, address string) (conn net.Conn, err error) {
+			if conn, err = netDialer.DialContext(ctx, network, address); err != nil {
+				return nil, err
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			conn.SetReadDeadline(deadline)
+			return conn, conn.SetDeadline(deadline)
+		},
+	}
+	httpClient = &http.Client{
+		Transport: httpTransport,
+		Timeout:   30 * time.Second,
+	}
 )
+
+type proxyHandler func(*http.Request) (*url.URL, error)
 
 // Params allows for a better structured input into NewClient
 type Params struct {
@@ -38,7 +68,6 @@ type HTTPClient struct {
 	domain   string
 	password string
 	baseURL  *url.URL
-	client   *http.Client
 	limit    *ratelimiter.Limiter
 	maxRetry int
 }
@@ -51,16 +80,22 @@ func NewClient(params Params) (*HTTPClient, error) {
 		return nil, err
 	}
 
-	adapter, err := generateHTTPAdapter(params.Timeout, params.Proxy)
-	if err != nil {
-		return nil, err
+	if params.Timeout != 0 {
+		httpClient.Timeout = params.Timeout
+	}
+
+	if params.Proxy != "" {
+		parsedURL, err := url.ParseRequestURI(params.Proxy)
+		if err != nil {
+			return nil, ErrInvalidProxyURL
+		}
+		httpTransport.Proxy = http.ProxyURL(parsedURL)
 	}
 
 	return &HTTPClient{
 		domain:   params.Domain,
 		password: params.Password,
 		baseURL:  baseURL,
-		client:   adapter,
 		limit:    ratelimiter.New(params.Domain, 4),
 		maxRetry: 5,
 	}, nil
@@ -118,7 +153,7 @@ func (client *HTTPClient) doWithRetry(req *http.Request, body interface{}) (*htt
 		}
 
 		client.limit.Wait()
-		resp, err := client.client.Do(req)
+		resp, err := httpClient.Do(req)
 		if err == nil {
 			if resp.StatusCode >= 100 && resp.StatusCode <= 428 {
 				return resp, nil
@@ -128,67 +163,12 @@ func (client *HTTPClient) doWithRetry(req *http.Request, body interface{}) (*htt
 				continue
 			}
 		} else if strings.Contains(err.Error(), "no such host") {
-			return nil, errConnectionIssue
+			return nil, ErrConnectionIssue
 		}
 		attempt++
 		time.Sleep(time.Duration(attempt) * time.Second)
 	}
 	return nil, fmt.Errorf("request failed after %v retries", client.maxRetry)
-}
-
-func generateHTTPAdapter(timeout time.Duration, proxyURL string) (*http.Client, error) {
-	transport, err := generateClientTransport(proxyURL)
-	if err != nil {
-		return nil, err
-	}
-	return &http.Client{
-		Transport: transport,
-		Timeout:   timeout,
-	}, nil
-}
-
-func generateClientTransport(proxyURL string) (*http.Transport, error) {
-	var proxy func(*http.Request) (*url.URL, error)
-	if proxyURL != "" {
-		parsedURL, err := url.ParseRequestURI(proxyURL)
-		if err != nil {
-			return nil, fmt.Errorf("invalid proxy URI")
-		}
-		proxy = http.ProxyURL(parsedURL)
-	}
-
-	return &http.Transport{
-		Proxy:                 proxy,
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
-		IdleConnTimeout:       time.Second,
-		TLSHandshakeTimeout:   time.Second,
-		ExpectContinueTimeout: time.Second,
-		ResponseHeaderTimeout: time.Second,
-		MaxIdleConnsPerHost:   10,
-		DialContext:           newDialContextDialer(),
-	}, nil
-}
-
-type contextDialer func(ctx context.Context, network, address string) (net.Conn, error)
-
-func newDialContextDialer() contextDialer {
-	dialer := &net.Dialer{
-		Timeout:   3 * time.Second,
-		KeepAlive: 1 * time.Second,
-	}
-	return func(ctx context.Context, network, address string) (conn net.Conn, err error) {
-		if conn, err = dialer.DialContext(ctx, network, address); err != nil {
-			return nil, err
-		}
-		deadline := time.Now().Add(5 * time.Second)
-		if err := conn.SetDeadline(deadline); err != nil {
-			return nil, err
-		}
-		if err := conn.SetReadDeadline(deadline); err != nil {
-			return nil, err
-		}
-		return conn, nil
-	}
 }
 
 func parseBaseURL(domain string) (*url.URL, error) {

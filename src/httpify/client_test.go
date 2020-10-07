@@ -144,18 +144,17 @@ func TestClient_do(t *testing.T) {
 }
 
 func TestGenerateHTTPAdapter(t *testing.T) {
-	_, err := generateHTTPAdapter(time.Second, "#$#$^$%^##$")
-	if assert.NotNil(t, err) {
-		assert.EqualError(t, err, "invalid proxy URI")
-	}
+	NewClient(Params{
+		Domain:  "https://shop.myshopify.com",
+		Timeout: 60 * time.Second,
+	})
+	assert.Equal(t, httpClient.Timeout, 60*time.Second)
 
-	c, err := generateHTTPAdapter(time.Second, "http://localhost:3000")
-	assert.Nil(t, err)
-	assert.Equal(t, time.Second, c.Timeout)
-	assert.NotNil(t, c.Transport)
+	NewClient(Params{Domain: "https://shop.myshopify.com"})
+	assert.Equal(t, httpClient.Timeout, 60*time.Second)
 }
 
-func TestGenerateClientTransport(t *testing.T) {
+func TestProxyConfig(t *testing.T) {
 	testcases := []struct {
 		proxyURL, err string
 	}{
@@ -165,18 +164,16 @@ func TestGenerateClientTransport(t *testing.T) {
 	}
 
 	for _, testcase := range testcases {
-		transport, err := generateClientTransport(testcase.proxyURL)
+		_, err := NewClient(Params{
+			Domain: "https://shop.myshopify.com",
+			Proxy:  testcase.proxyURL,
+		})
 		if testcase.err == "" && assert.Nil(t, err) {
 			if testcase.proxyURL == "" {
-				assert.Nil(t, transport.Proxy)
+				assert.Nil(t, httpTransport.Proxy)
 			} else {
-				assert.NotNil(t, transport.Proxy)
+				assert.NotNil(t, httpTransport.Proxy)
 			}
-			assert.True(t, transport.TLSClientConfig.InsecureSkipVerify)
-			assert.Equal(t, time.Second, transport.IdleConnTimeout)
-			assert.Equal(t, time.Second, transport.TLSHandshakeTimeout)
-			assert.Equal(t, time.Second, transport.ExpectContinueTimeout)
-			assert.Equal(t, 10, transport.MaxIdleConnsPerHost)
 		} else if assert.NotNil(t, err) {
 			assert.Contains(t, err.Error(), testcase.err)
 		}
